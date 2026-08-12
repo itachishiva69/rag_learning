@@ -1,0 +1,6 @@
+*venv
+*data
+.env
+.ipynb*
+_*
+*.ipynb

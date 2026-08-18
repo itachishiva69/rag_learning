@@ -1,333 +1,656 @@
-# RAG From Scratch
+# RAG Learning Project
 
-A simple Retrieval-Augmented Generation (RAG) system built from scratch in Python.
+A practical Retrieval-Augmented Generation (RAG) project built with **Python, LangChain, Hugging Face embeddings, FAISS, and Groq**.
 
-This project is intentionally implemented without LangChain so that each part of the RAG pipeline is clear and understandable.
+This project is being developed step by step to understand how a production-style RAG system works, starting from document ingestion and ending with an LLM-generated answer based on retrieved document context.
 
-## What This Project Does
-
-The system:
-
-1. Loads `.txt` documents from the `data/` directory.
-2. Splits documents into overlapping chunks.
-3. Creates sentence embeddings using `all-MiniLM-L6-v2`.
-4. Normalizes the embeddings.
-5. Stores them in a FAISS vector index.
-6. Embeds a user's query.
-7. Retrieves the top-K most similar chunks.
-8. Builds context from the retrieved chunks.
-9. Sends the context and question to a Groq LLM.
-10. Generates an answer grounded in the retrieved context.
-
-## RAG Pipeline
+## Architecture
 
 ```text
-Documents
-    ↓
-Document Loading
-    ↓
-Chunking
-    ↓
-Sentence Embeddings
-    ↓
-Normalization
-    ↓
-FAISS Vector Index
-    ↓
-User Query
-    ↓
-Query Embedding
-    ↓
-Similarity Search
-    ↓
-Top-K Retrieved Chunks
-    ↓
+PDF Documents
+     ↓
+PDF Loader
+     ↓
+Document Objects
+     ↓
+Text Chunking
+     ↓
+Embedding Model
+     ↓
+FAISS Vector Store
+     ↓
+Retriever
+     ↓
+Relevant Documents
+     ↓
 Context Construction
-    ↓
-Question + Context
-    ↓
+     ↓
+Prompt Template
+     ↓
 Groq LLM
-    ↓
-Answer
+     ↓
+Generated Answer
 ```
 
 ## Project Structure
 
 ```text
-rag_project/
+rag_learning/
 │
 ├── data/
-│   ├── python.txt
-│   ├── postgres.txt
-│   └── docker.txt
+│   ├── NIPS-2017-attention-is-all-you-need-Paper.pdf
+│   ├── UnderstandingDeepLearning_02_09_26_C.pdf
+│   └── LLM.pdf
 │
-├── 01_load.py
-├── 02_chunk.py
-├── 03_embed.py
-├── 04_store.py
-├── 05_retrieve.py
-├── rag.py
-├── main.py
+├── src/
+│   ├── __init__.py
+│   ├── app.py
+│   ├── ingestion.py
+│   ├── embeddings.py
+│   ├── retrieval.py
+│   ├── prompts.py
+│   └── llm.py
+│
+├── .env
+├── .gitignore
+├── requirements.txt
 └── README.md
 ```
 
-### Files
+## Current Dataset
 
-- `01_load.py` - Loads the text documents.
-- `02_chunk.py` - Splits documents into overlapping chunks.
-- `03_embed.py` - Creates 384-dimensional sentence embeddings.
-- `04_store.py` - Creates and populates the FAISS index.
-- `05_retrieve.py` - Performs semantic retrieval and builds context.
-- `rag.py` - Contains the reusable RAG pipeline functions.
-- `main.py` - Runs the complete RAG application.
-- `data/` - Contains the source documents.
+| Document | Pages | Chunks |
+|---|---:|---:|
+| Attention Is All You Need | 11 | 76 |
+| Understanding Deep Learning | 541 | 3,131 |
+| LLM | 47 | 617 |
+| **Total** | **599** | **3,824** |
 
-The numbered files are learning steps. `rag.py` and `main.py` are the refactored version of the complete pipeline.
-
-## Requirements
-
-Recommended Python version:
-
-```text
-Python 3.12
-```
-
-Main libraries:
-
-```text
-sentence-transformers
-faiss-cpu
-numpy
-openai
-```
-
-Install them with:
-
-```powershell
-pip install sentence-transformers faiss-cpu numpy openai
-```
-
-## Groq API
-
-This project uses Groq as the LLM provider through its OpenAI-compatible API.
-
-Set your Groq API key as an environment variable.
-
-### PowerShell
-
-```powershell
-$env:GROQ_API_KEY="your_api_key_here"
-```
-
-Do not hard-code your API key in the Python files or commit it to Git.
-
-The code uses:
+The current chunking configuration is:
 
 ```python
-client = OpenAI(
-    api_key=os.environ.get("GROQ_API_KEY"),
-    base_url="https://api.groq.com/openai/v1"
+chunk_size=500
+chunk_overlap=50
+```
+
+## 1. PDF Ingestion
+
+PDFs are loaded using LangChain's `PyPDFLoader`.
+
+```python
+from langchain_community.document_loaders import PyPDFLoader
+
+loader = PyPDFLoader("data/document.pdf")
+documents = loader.load()
+```
+
+Each page becomes a LangChain `Document`.
+
+A document contains:
+
+```python
+Document(
+    page_content="...",
+    metadata={
+        "source": "...",
+        "page": 0,
+        ...
+    }
 )
 ```
 
-The current example uses:
+The metadata is preserved when documents are split into chunks.
+
+### PDF limitation
+
+Standard PDF text extraction primarily extracts the document's text layer. Images, diagrams, and scanned content may not be represented in `page_content`.
+
+One of the PDFs in this project produced the following extraction warning:
+
+```text
+Exceeded 5000 form XObject invocations while extracting text;
+further form content is skipped.
+```
+
+Handling complex PDFs, OCR, tables, images, and multimodal documents is planned as a later improvement.
+
+## 2. Chunking
+
+Documents are split using:
+
+```python
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+splitter = RecursiveCharacterTextSplitter(
+    chunk_size=500,
+    chunk_overlap=50
+)
+
+chunks = splitter.split_documents(documents)
+```
+
+Chunking is necessary because embedding an entire large document into one vector can mix too much information.
+
+Very small chunks can lose context, while very large chunks can contain excessive irrelevant information.
+
+The goal is to create chunks that contain enough coherent information for useful retrieval.
+
+## 3. Embeddings
+
+The project uses:
+
+```text
+sentence-transformers/all-MiniLM-L6-v2
+```
+
+through LangChain's Hugging Face integration.
+
+```python
+from langchain_huggingface import HuggingFaceEmbeddings
+
+embedding_model = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
+)
+```
+
+The current dataset produces:
+
+```text
+Number of chunks:       3824
+Embedding dimension:    384
+```
+
+Therefore the conceptual embedding matrix is:
+
+```text
+(3824, 384)
+```
+
+Each chunk is represented by a 384-dimensional vector.
+
+## 4. FAISS Vector Store
+
+FAISS is used as the vector store.
+
+```python
+from langchain_community.vectorstores import FAISS
+
+vector_store = FAISS.from_documents(
+    chunks,
+    embedding_model
+)
+```
+
+FAISS allows the application to perform similarity searches against the embedded chunks.
+
+The project previously implemented raw FAISS manually. The LangChain integration now handles the mapping between:
+
+```text
+Document ↔ Embedding ↔ FAISS index
+```
+
+## 5. Similarity Search
+
+A query is embedded using the same embedding model and compared against the stored vectors.
+
+Example:
+
+```text
+"What is the Transformer architecture?"
+```
+
+The system retrieves semantically related chunks.
+
+The test retrieval successfully returned relevant content from:
+
+```text
+Understanding Deep Learning
+Attention Is All You Need
+LLM
+```
+
+## 6. Retriever
+
+The FAISS vector store can be converted into a LangChain retriever:
+
+```python
+retriever = vector_store.as_retriever(
+    search_kwargs={"k": 3}
+)
+```
+
+The query can then be executed with:
+
+```python
+documents = retriever.invoke(query)
+```
+
+The retriever returns LangChain `Document` objects.
+
+```python
+document.page_content
+document.metadata
+```
+
+The retriever provides an abstraction over the underlying vector store.
+
+## 7. Metadata Filtering
+
+Chunks contain metadata such as:
+
+```python
+{
+    "source": "data/LLM.pdf",
+    "page": 20
+}
+```
+
+Metadata filtering can restrict which documents participate in the search.
+
+For example:
+
+```python
+retriever = vector_store.as_retriever(
+    search_kwargs={
+        "k": 3,
+        "filter": {
+            "source": "data/LLM.pdf"
+        }
+    }
+)
+```
+
+The conceptual process becomes:
+
+```text
+All chunks
+    ↓
+Metadata filter
+    ↓
+Eligible chunks
+    ↓
+Semantic search
+    ↓
+Top-k chunks
+```
+
+Metadata filtering does not replace semantic search.
+
+## 8. Context Construction
+
+The retriever returns `Document` objects, but the LLM needs the actual text.
+
+The retrieved `page_content` values are combined into a context:
+
+```python
+context = "\n\n".join(
+    document.page_content
+    for document in documents
+)
+```
+
+Conceptually:
+
+```text
+Document 1
+    ↓
+page_content
+
+Document 2
+    ↓
+page_content
+
+Document 3
+    ↓
+page_content
+
+       ↓
+
+Combined Context
+```
+
+## 9. Prompt Template
+
+A reusable LangChain prompt is created using `ChatPromptTemplate`.
+
+```python
+from langchain_core.prompts import ChatPromptTemplate
+
+prompt = ChatPromptTemplate.from_template(
+    """
+    You are a helpful assistant.
+
+    Answer the question using only the provided context.
+
+    If the answer is not present in the context, say:
+    "I don't know based on the provided documents."
+
+    Context:
+    {context}
+
+    Question:
+    {question}
+    """
+)
+```
+
+The placeholders:
+
+```text
+{context}
+{question}
+```
+
+are filled when the prompt is invoked.
+
+## 10. Groq LLM
+
+The project uses Groq for answer generation.
+
+The API key is stored in `.env`:
+
+```text
+GROQ_API_KEY=your_api_key
+```
+
+The `.env` file should never be committed to Git.
+
+The current accessible model used by the project is:
 
 ```text
 openai/gpt-oss-20b
 ```
 
-## Running the Project
+Example:
 
-From the project directory:
+```python
+from langchain_groq import ChatGroq
 
-```powershell
-python main.py
+llm = ChatGroq(
+    model="openai/gpt-oss-20b",
+    temperature=0
+)
 ```
 
-The program will ask:
+## 11. Complete RAG Flow
+
+The current application performs:
+
+```python
+query = input("Ask a question: ")
+
+documents = retriever.invoke(query)
+
+context = "\n\n".join(
+    document.page_content
+    for document in documents
+)
+
+messages = prompt.invoke({
+    "context": context,
+    "question": query
+})
+
+response = llm.invoke(messages)
+
+print(response.content)
+```
+
+The complete flow is:
 
 ```text
-Ask a question:
+User Question
+      ↓
+Retriever
+      ↓
+Relevant Documents
+      ↓
+page_content
+      ↓
+Context
+      ↓
+Prompt Template
+      ↓
+Groq LLM
+      ↓
+Answer
 ```
+
+## Advanced RAG Concepts Covered
+
+The project is also being developed around the following advanced RAG concepts.
+
+### Better Chunking
+
+Creating chunks that preserve meaningful context while reducing irrelevant information.
+
+### Metadata Filtering
+
+Restricting retrieval to documents matching structured metadata.
+
+### Query Rewriting
+
+Rewriting context-dependent questions into standalone retrieval queries.
 
 Example:
 
 ```text
-What is PostgreSQL used for?
+"What about authentication?"
+            ↓
+"What authentication mechanisms does PostgreSQL support?"
 ```
 
-The system will retrieve relevant chunks and send them to the LLM.
+### Hybrid Search
 
-## Chunking
+Combining:
 
-The current learning implementation uses:
-
-```python
-chunk_size = 150
-chunk_overlap = 30
+```text
+Semantic Search
++
+Keyword Search
 ```
 
-The next chunk starts at:
+Semantic search is useful for meaning and concepts, while keyword search is useful for exact terms such as error codes, identifiers, and technical names.
 
-```python
-start += chunk_size - chunk_overlap
+### Reranking
+
+The retriever finds candidate chunks, then a reranker evaluates those candidates more carefully and improves their ordering.
+
+```text
+Retriever
+   ↓
+50 candidates
+   ↓
+Reranker
+   ↓
+Top relevant chunks
 ```
+
+### Context Compression
+
+Removing irrelevant portions from retrieved documents before sending the context to the LLM.
+
+```text
+Retrieved Documents
+        ↓
+Context Compression
+        ↓
+Relevant Information
+        ↓
+LLM
+```
+
+### Conversational RAG
+
+Using conversation history to handle follow-up questions.
+
+```text
+Conversation History
+        +
+Current Question
+        ↓
+Query Rewriting
+        ↓
+Retriever
+        ↓
+Context
+        ↓
+LLM
+```
+
+### Self-Query Retrieval
+
+Allowing a query-understanding step to extract structured metadata filters from natural-language questions.
 
 For example:
 
 ```text
-Chunk 1: 0 → 150
-Chunk 2: 120 → 270
-Chunk 3: 240 → 390
+"What did the 2017 paper say about attention?"
 ```
 
-The 30-character overlap helps preserve context across chunk boundaries.
-
-This is a simple character-based chunking strategy used for learning. It is not necessarily the best strategy for every real-world document.
-
-## Embeddings
-
-The project uses:
+can conceptually become:
 
 ```text
-all-MiniLM-L6-v2
+Metadata filter:
+year = 2017
+
+Semantic query:
+"attention"
 ```
 
-Each chunk is converted into a:
+### RAG Evaluation
+
+Evaluating different parts of the RAG system independently:
+
+- Retrieval recall
+- Retrieval precision
+- Answer quality
+- Faithfulness / groundedness
+
+## Learning Progress
 
 ```text
-384-dimensional vector
+RAG Foundations                   ✅
+Document Processing               ✅
+Embeddings                        ✅
+Vector Search                     ✅
+Raw FAISS                         ✅
+RAG From Scratch                  ✅
+LangChain Fundamentals            ✅
+LangChain FAISS                   ✅
+Retriever                         ✅
+Advanced RAG Theory               ✅
+PDF-based RAG Implementation      🚧
+End-to-End LangChain RAG          ✅
+LCEL RAG Chain                    ⬜
+Advanced Retrieval Implementation ⬜
+Production RAG                    ⬜
+Agentic RAG                       ⬜
+LangGraph                         ⬜
+Production RAG Agent              ⬜
 ```
 
-If there are 9 chunks:
+## Future Roadmap
 
 ```text
-embeddings.shape
-→ (9, 384)
+Current RAG
+    ↓
+LCEL RAG Chain
+    ↓
+Dynamic Metadata Filtering
+    ↓
+Query Rewriting
+    ↓
+Hybrid Search
+    ↓
+Reranking
+    ↓
+Context Compression
+    ↓
+Conversational RAG
+    ↓
+RAG Evaluation
+    ↓
+Production RAG
+    ↓
+Tool Calling
+    ↓
+RAG as a Tool
+    ↓
+Agents
+    ↓
+LangGraph
+    ↓
+Agentic RAG
+    ↓
+Production RAG Agent
 ```
 
-The first dimension represents the number of chunks.
+## Installation
 
-The second dimension represents the embedding size.
+Create and activate a virtual environment:
 
-## FAISS
-
-The project uses:
-
-```python
-faiss.IndexFlatIP(384)
+```bash
+python -m venv .venv
+source .venv/bin/activate
 ```
 
-The embeddings are normalized before being added to the index.
+Install dependencies:
 
-With normalized vectors, inner product can be used to perform cosine-similarity-based retrieval.
-
-During search:
-
-```python
-scores, indices = index.search(
-    query_embedding,
-    k
-)
+```bash
+pip install -r requirements.txt
 ```
 
-`k` specifies how many nearest chunks to retrieve.
-
-The returned indices are then mapped back to the original chunks.
-
-## Metadata
-
-Each chunk currently keeps metadata such as its source file:
-
-```python
-{
-    "source": "python.txt"
-}
-```
-
-Conceptually, each stored chunk contains:
+Create `.env`:
 
 ```text
-Text
-+
-Embedding
-+
-Metadata
+GROQ_API_KEY=your_api_key
 ```
 
-Metadata can later be expanded with information such as:
+Run the application:
 
-```text
-source
-page
-document type
-date
-category
+```bash
+python -m src.app
 ```
 
-This will allow metadata filtering in more advanced versions of the project.
+## Security
 
-## Current Limitations
+Never commit API keys.
 
-This is a learning implementation, not a production RAG system.
-
-Current limitations include:
-
-- Documents are loaded from `.txt` files only.
-- Chunking is character-based.
-- The FAISS index is rebuilt when the application starts.
-- The index is not persisted to disk.
-- There is no sophisticated metadata filtering implementation yet.
-- There is no reranking.
-- There is no query rewriting.
-- There is no retrieval evaluation.
-- There is no conversational memory.
-- The project currently uses a simple prompt for grounding.
-
-These features will be addressed later as part of the advanced RAG learning path.
-
-## Learning Goal
-
-The purpose of this project is to understand RAG from the inside rather than hiding the important components behind a framework.
-
-The core components are:
+Add `.env` to `.gitignore`:
 
 ```text
-Document Loading
-       ↓
+.env
+```
+
+Check before committing:
+
+```bash
+git status
+```
+
+## Project Goal
+
+This project is intentionally being built from the fundamentals upward.
+
+The goal is not simply to use LangChain APIs. The goal is to understand what happens underneath them:
+
+```text
+Documents
+    ↓
 Chunking
-       ↓
-Embedding
-       ↓
+    ↓
+Embeddings
+    ↓
 Vector Search
-       ↓
+    ↓
 Retrieval
-       ↓
-Context Construction
-       ↓
-LLM Generation
+    ↓
+Context
+    ↓
+Prompt
+    ↓
+LLM
 ```
 
-After understanding this implementation, the same concepts can be implemented using frameworks such as LangChain.
-
-## Next Step
-
-The next stage of the learning path is **LangChain**.
-
-The goal is not to blindly rewrite this project with LangChain.
-
-Instead, each LangChain abstraction will be mapped to the code already built here:
-
-```text
-Our Code                    LangChain
-────────────────────────────────────────
-load_documents()       →    Document loaders
-chunk_documents()      →    Text splitters
-create_embeddings()    →    Embeddings
-build_index()          →    Vector stores
-retrieve()             →    Retrievers
-prompt                 →    Prompt templates
-generate_answer()      →    Chat models
-```
-
-This makes it easier to understand what LangChain is actually doing underneath.
+The project will then progressively turn this basic RAG system into a more capable **production-style RAG and Agentic RAG system**.

@@ -1,8 +1,9 @@
 from src.ingestion import doc_loader, chunk_maker
 from src.emmbeddings import create_embedding_model
 from src.retrieval import create_vector_store,create_retriever
-from src.prompts import create_rag_prompt,format_documents
+from src.prompts import create_rag_prompt,format_documents, format_source
 from src.llm import create_llm
+from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 
 documents = doc_loader('data')
 
@@ -18,29 +19,38 @@ vector_store = create_vector_store(
 
 retriever = create_retriever(
     vector_store,
-    k = 3,
-    source = 'data/NIPS-2017-attention-is-all-you-need-Paper.pdf'
+    k = 3
+    # source = 'data/NIPS-2017-attention-is-all-you-need-Paper.pdf'
 )
-
-query = input('\n ask a question : ')
-
-results = retriever.invoke(query)
-
-context = format_documents(results)
 
 prompt = create_rag_prompt()
 
-messages = prompt.invoke({
-    'context' : context,
-    'question' : query
-})
-
 llm = create_llm()
 
-response = llm.invoke(messages)
+rag_chain = (
+    {
+        'context' : retriever | RunnableLambda(format_documents),
+        'question' : RunnablePassthrough()
+    }
+    |prompt
+    |llm
+)
+query = input('\n ask a question : ')
+
+
+
+
+response = rag_chain.invoke(query)
+
+
+
+
+
+# response = llm.invoke(messages)
 
 
 print('\nAnswer:')
 print(response.content)
+
 
 

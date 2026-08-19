@@ -48,7 +48,10 @@ def chunk_maker(documents:list):
     chunks = splitter.split_documents(documents)
     return chunks
 
-    
+
+
+
+ 
 
 if __name__ == "__main__":
     documents = doc_loader('../data')

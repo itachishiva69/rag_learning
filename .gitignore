@@ -3,3 +3,4 @@
 .env
 *.ipynb
 *.code-workspace
+__pycache__

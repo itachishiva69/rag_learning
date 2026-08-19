@@ -23,3 +23,17 @@ def format_documents(documents):
     return '\n\n'.join(
         document.page_content for document in documents
     )
+
+
+def format_source(documents):
+
+    sources = []
+
+    for document in documents:
+        source = document.metadata.get('source')
+        page = document.metadata.get('page')
+
+        sources.append(
+            f'{source},page{page+1}'
+        )
+    return sources

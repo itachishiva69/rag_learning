@@ -18,6 +18,26 @@ Question :
 '''
     )
 
+rewrite_promt = ChatPromptTemplate.from_template(
+"""
+    Given the conversation history and the latest user question,
+    rewrite the latest question as a standalone question.
+
+    Do not answer the question.
+    Return only the rewritten question.
+
+    Conversation history:
+    {history}
+
+    Latest question:
+    {question}
+    """
+
+
+)
+
+
+
 
 def format_documents(documents):
     return '\n\n'.join(
